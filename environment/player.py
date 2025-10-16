@@ -48,7 +48,7 @@ class Player:
         else:
             ax, ay = action
 
-        # Normalize move vector to prevent too large jumps
+        # Normalize move vector for consistent acceleration
         mag = (ax**2 + ay**2)**0.5
         if mag > 1e-5:
             ax /= mag
@@ -56,7 +56,7 @@ class Player:
         else:
             ax, ay = 0.0, 0.0
 
-        # Apply acceleration
+        # Smooth velocity update
         self.vx += ax * self.acceleration
         self.vy += ay * self.acceleration
 
@@ -68,7 +68,7 @@ class Player:
             self.vx *= scale
             self.vy *= scale
 
-        # Integrate position
+        # Apply velocity to position
         self.x += self.vx
         self.y += self.vy
 
@@ -76,10 +76,15 @@ class Player:
         self.vx *= self.damping
         self.vy *= self.damping
 
+        # Threshold small velocities to zero to prevent jitter
+        if abs(self.vx) < 0.01: self.vx = 0.0
+        if abs(self.vy) < 0.01: self.vy = 0.0
+
         # Keep inside field
         self.x, self.y, self.vx, self.vy = resolve_circle_wall_collision(
             self.x, self.y, self.vx, self.vy, self.radius, width, height, restitution=0.4
         )
+
 
 
 

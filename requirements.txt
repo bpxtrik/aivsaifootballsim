@@ -2,3 +2,6 @@ pygame
 torch
 numpy
 pandas
+stable-baselines3
+gymnasium
+tensorboard

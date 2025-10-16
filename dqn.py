@@ -91,6 +91,10 @@ class DQNAgent:
         eps = self.epsilon_final + (self.epsilon_start - self.epsilon_final) * \
               max(0, (1 - t / self.epsilon_decay))
         return eps
+    
+    @property
+    def epsilon(self):
+        return self._epsilon()
 
     def store_transition(self, state, action, reward, next_state, done):
         # store numpy arrays / scalars
@@ -142,11 +146,20 @@ class DQNAgent:
         torch.save({
             'q_state_dict': self.q_net.state_dict(),
             'target_state_dict': self.target_net.state_dict(),
-            'optimizer_state': self.optimizer.state_dict()
+            'optimizer_state': self.optimizer.state_dict(),
+            'epsilon': getattr(self, 'epsilon', 0.1)  # save epsilon if exists
         }, path)
+        print(f"Agent saved to {path}")
 
     def load(self, path):
+        import os
+        if not os.path.exists(path):
+            print(f"No checkpoint found at {path}")
+            return
         d = torch.load(path, map_location=self.device)
         self.q_net.load_state_dict(d['q_state_dict'])
         self.target_net.load_state_dict(d['target_state_dict'])
         self.optimizer.load_state_dict(d['optimizer_state'])
+        if 'epsilon' in d:
+            self.epsilon = d['epsilon']
+        print(f"Agent loaded from {path}")
