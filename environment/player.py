@@ -2,7 +2,7 @@ import pygame
 from environment.utils import resolve_circle_wall_collision
 
 class Player:
-    def __init__(self, x, y, team_id, radius=15, color=(0, 0, 255)):
+    def __init__(self, x, y, team_id, radius=15, color=(0, 0, 255), stats=None):
         self.x = x
         self.y = y
         self.team_id = team_id
@@ -16,6 +16,28 @@ class Player:
         self.mass = 70.0
         self.has_ball = False
         self.kick_power = 12.0
+        
+        self.pac = None
+        self.sho = None
+        self.pas = None
+        self.dri = None
+        self.defense = None
+        self.phy = None
+        
+        if stats:
+            self.load_stats(stats)
+            
+    def load_stats(self, stats): 
+        self.pac = stats.get("PAC")
+        self.sho = stats.get("SHO")
+        self.pas = stats.get("PAS")
+        self.dri = stats.get("DRI")
+        self.defense = stats.get("DEF")
+        self.phy = stats.get("PHY")
+        
+        if self.pac:
+            self.max_speed = 2.0 + (self.pac / 100) * 4.0
+            self.acceleration = 0.3 + (self.pac / 100) * 0.5
 
     def move(self, action, bounds):
         """action: dict or tuple; if dict expects {'move':(dx,dy), 'shoot':bool}; bounds=(w,h)"""
