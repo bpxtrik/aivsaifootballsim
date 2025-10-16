@@ -40,37 +40,53 @@ class Player:
             self.acceleration = 0.3 + (self.PAC / 100) * 0.5
 
     def move(self, action, bounds):
-        """action: dict or tuple; if dict expects {'move':(dx,dy), 'shoot':bool}; bounds=(w,h)"""
         width, height = bounds
+
+        # Extract move vector
         if isinstance(action, dict):
             ax, ay = action.get('move', (0.0, 0.0))
         else:
             ax, ay = action
+
+        # Normalize move vector to prevent too large jumps
+        mag = (ax**2 + ay**2)**0.5
+        if mag > 1e-5:
+            ax /= mag
+            ay /= mag
+        else:
+            ax, ay = 0.0, 0.0
+
+        # Apply acceleration
         self.vx += ax * self.acceleration
         self.vy += ay * self.acceleration
 
-        # limit speed
-        speed_sq = self.vx * self.vx + self.vy * self.vy
-        max_speed_sq = self.max_speed * self.max_speed
+        # Limit speed
+        speed_sq = self.vx**2 + self.vy**2
+        max_speed_sq = self.max_speed**2
         if speed_sq > max_speed_sq:
-            scale = self.max_speed / (speed_sq ** 0.5)
+            scale = self.max_speed / (speed_sq**0.5)
             self.vx *= scale
             self.vy *= scale
 
-        # integrate
+        # Integrate position
         self.x += self.vx
         self.y += self.vy
 
-        # damping
+        # Apply damping for smooth movement
         self.vx *= self.damping
         self.vy *= self.damping
 
-        # keep inside box
+        # Keep inside field
         self.x, self.y, self.vx, self.vy = resolve_circle_wall_collision(
             self.x, self.y, self.vx, self.vy, self.radius, width, height, restitution=0.4
         )
+
+
 
     def draw(self, screen):
         pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
         if self.has_ball:
             pygame.draw.circle(screen, (255, 255, 0), (int(self.x), int(self.y)), self.radius + 3, 2)
+
+    def __str__(self):
+        return (f"{self.PAC}-{self.SHO}-{self.PAS}-{self.DRI}-{self.DEF}-{self.PHY}")

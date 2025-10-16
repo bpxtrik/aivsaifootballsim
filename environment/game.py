@@ -1,5 +1,7 @@
 import pygame
 import numpy as np
+from agents.coach_agent import CoachAgent
+from agents.player_agent import PlayerAgent
 from environment.player import Player
 from environment.ball import Ball
 from environment.team import Team
@@ -30,6 +32,15 @@ class FootballGame:
         self.screen = pygame.display.set_mode((self.width, self.height))
         self.clock = pygame.time.Clock()
 
+        self.agents_team1 = [PlayerAgent(p, role="goalkeeper" if i == 0 else "field") 
+                     for i, p in enumerate(self.team1.players)]
+        self.agents_team2 = [PlayerAgent(p, role="goalkeeper" if i == 0 else "field") 
+                            for i, p in enumerate(self.team2.players)]
+
+        # Coach agents
+        self.coach_team1 = CoachAgent(self.team1)
+        self.coach_team2 = CoachAgent(self.team2)
+
     def reset(self):
         self.score_left = 0
         self.score_right = 0
@@ -43,6 +54,18 @@ class FootballGame:
             actions_team1 = {}
         if actions_team2 is None:
             actions_team2 = {}
+
+        # Detect if we’re in RL mode (actions are ints) or manual/AI mode (dicts)
+        if len(actions_team1) > 0 and isinstance(next(iter(actions_team1.values())), int):
+            actions_team1 = {
+                i: self.agents_team1[i].act(self, action_int=a)
+                for i, a in actions_team1.items()
+            }
+        if len(actions_team2) > 0 and isinstance(next(iter(actions_team2.values())), int):
+            actions_team2 = {
+                i: self.agents_team2[i].act(self, action_int=a)
+                for i, a in actions_team2.items()
+            }
 
         # Update players
         self.team1.update(actions_team1, self.ball)
@@ -77,14 +100,134 @@ class FootballGame:
         rewards = self._calculate_rewards()
         state = self._get_state()
         return state, rewards, self.done
+    
+    def step_with_agents(self, player_agents_team1, player_agents_team2):
+        # Build a minimal state representation for agents
+        state = {
+            'ball_x': self.ball.x,
+            'ball_y': self.ball.y,
+            'field_width': self.width,
+            'field_height': self.height,
+            'goal_top': (self.height - 200)//2,
+            'goal_bottom': (self.height + 200)//2
+        }
+
+        # Get actions from all player agents
+        actions_team1 = {i: agent.act(state) for i, agent in enumerate(player_agents_team1)}
+        actions_team2 = {i: agent.act(state) for i, agent in enumerate(player_agents_team2)}
+
+        # Call the original step with agent actions
+        return self.step(actions_team1, actions_team2)
+
 
     def _calculate_rewards(self):
-        # TODO: implement reward logic later
-        return 0
+        """
+        Returns rewards for all players as two arrays: team1_rewards, team2_rewards
+        """
+        rewards_team1 = np.zeros(len(self.team1.players))
+        rewards_team2 = np.zeros(len(self.team2.players))
+
+        # Goal rewards
+        if self.last_scored == "left":
+            rewards_team1 += 1
+            rewards_team2 -= 1
+        elif self.last_scored == "right":
+            rewards_team1 -= 1
+            rewards_team2 += 1
+
+        # Possession reward
+        for i, p in enumerate(self.team1.players):
+            if p.has_ball:
+                rewards_team1[i] += 0.05
+                # Optional: reward for moving towards opponent goal
+                rewards_team1[i] += ((self.width - p.x) / self.width) * 0.01 if p.team_id == 1 else (p.x / self.width) * 0.01
+
+        for i, p in enumerate(self.team2.players):
+            if p.has_ball:
+                rewards_team2[i] += 0.05
+                # Optional: reward for moving towards opponent goal
+                rewards_team2[i] += (p.x / self.width) * 0.01 if p.team_id == 2 else ((self.width - p.x) / self.width) * 0.01
+
+        for i, p in enumerate(self.team1.players):
+            if not p.has_ball:
+                dist = np.hypot(self.ball.x - p.x, self.ball.y - p.y)
+                rewards_team1[i] += -0.01 * dist / self.width  # smaller distance → higher reward
+        for i, p in enumerate(self.team2.players):
+            if not p.has_ball:
+                dist = np.hypot(self.ball.x - p.x, self.ball.y - p.y)
+                rewards_team2[i] += -0.01 * dist / self.width
+
+        return rewards_team1, rewards_team2
+
 
     def _get_state(self):
-        # TODO: encode positions + stats into numpy array
-        return np.array([])
+        """
+        Returns the game state as a vector for all agents.
+        Each agent sees:
+        - Its own position and velocity
+        - Ball position and velocity
+        - Relative positions/velocities of teammates
+        - Relative positions/velocities of opponents
+        - Ball possession
+        """
+        state = []
+
+        # Ball info
+        ball_info = [
+            self.ball.x / self.width,
+            self.ball.y / self.height,
+            self.ball.vx / 10.0,  # normalize by reasonable speed
+            self.ball.vy / 10.0,
+            self.ball.pickup_cooldown / 20.0
+        ]
+
+        for team, opponents in [(self.team1, self.team2), (self.team2, self.team1)]:
+            for player in team.players:
+                # Own player info
+                player_info = [
+                    player.x / self.width,
+                    player.y / self.height,
+                    player.vx / 10.0,
+                    player.vy / 10.0,
+                    1.0 if player.has_ball else 0.0
+                ]
+
+                # Teammates relative info
+                for mate in team.players:
+                    if mate is player:
+                        continue
+                    player_info.extend([
+                        (mate.x - player.x) / self.width,
+                        (mate.y - player.y) / self.height,
+                        (mate.vx - player.vx) / 10.0,
+                        (mate.vy - player.vy) / 10.0,
+                        1.0 if mate.has_ball else 0.0
+                    ])
+
+                # Opponents relative info
+                for opp in opponents.players:
+                    player_info.extend([
+                        (opp.x - player.x) / self.width,
+                        (opp.y - player.y) / self.height,
+                        (opp.vx - player.vx) / 10.0,
+                        (opp.vy - player.vy) / 10.0,
+                        1.0 if opp.has_ball else 0.0
+                    ])
+
+                # Add ball info relative to player
+                player_info.extend([
+                    (self.ball.x - player.x) / self.width,
+                    (self.ball.y - player.y) / self.height,
+                    self.ball.vx / 10.0,
+                    self.ball.vy / 10.0,
+                    1.0 if player.has_ball else 0.0
+                ])
+
+                state.append(player_info)
+
+            state = np.array(state, dtype=np.float32)
+            return state.flatten()
+
 
     def _resolve_player_ball(self, player: Player):
         # If player has ball, keep it attached just in front of player
@@ -97,11 +240,11 @@ class FootballGame:
                 nx, ny = vx / speed, vy / speed
             else:
                 nx, ny = (1.0, 0.0) if player.team_id == 1 else (-1.0, 0.0)
-            self.ball.x = player.x + nx * offset
-            self.ball.y = player.y + ny * offset
-            # Dribble carries ball velocity
-            self.ball.vx = player.vx
-            self.ball.vy = player.vy
+            alpha = 0.3  # smoothing factor
+            self.ball.x += (player.x + nx * offset - self.ball.x) * alpha
+            self.ball.y += (player.y + ny * offset - self.ball.y) * alpha
+            self.ball.vx = player.vx * alpha + self.ball.vx * (1-alpha)
+            self.ball.vy = player.vy * alpha + self.ball.vy * (1-alpha)
             return
 
         # Otherwise collide normally
@@ -172,7 +315,7 @@ class FootballGame:
         # Resolve duels between nearby players
         winner = potential_players[0]
         for p in potential_players[1:]:
-            if (winner.team_id == p.team_id):
+            if winner.team_id == p.team_id:
                 continue
             if self.physical_duel(winner, p):
                 winner = winner  # current winner keeps possession
@@ -185,46 +328,46 @@ class FootballGame:
 
         winner.has_ball = True
 
-        # Determine action (shoot or pass)
-        action = None
+        # Determine action based on agent input
         if winner.team_id == 1:
             action = actions_team1.get(self.team1.players.index(winner))
         else:
             action = actions_team2.get(self.team2.players.index(winner))
 
-        if isinstance(action, dict):
-            if action.get("shoot", False):
-                # Shooting
-                goalkeeper = self.team2.players[0] if winner.team_id == 1 else self.team1.players[0]
-                success_prob = shot_success(winner, goalkeeper)
-                if random.random() < success_prob:
-                    # Goal scored
-                    if winner.team_id == 1:
-                        self.score_left += 1
-                    else:
-                        self.score_right += 1
-                # Ball is reset or moves forward even if missed
-                self.ball.pickup_cooldown = 20
-                winner.has_ball = False
+        if not isinstance(action, dict):
+            return  # No action provided, just keep ball
 
-            elif "pass_to" in action:
-                # Passing
-                teammate_idx = action["pass_to"]
-                teammate = (self.team1.players if winner.team_id == 1 else self.team2.players)[teammate_idx]
-
-                # Find closest opponent to the pass line
-                opponents = self.team2.players if winner.team_id == 1 else self.team1.players
-                closest_opponent = min(opponents, key=lambda o: ((o.x - teammate.x)**2 + (o.y - teammate.y)**2)**0.5)
-
-                success_prob = pass_success(winner, teammate, closest_opponent)
-                if random.random() < success_prob:
-                    # Successful pass
-                    winner.has_ball = False
-                    teammate.has_ball = True
+        # SHOOT
+        if action.get("shoot", False):
+            goalkeeper = self.team2.players[0] if winner.team_id == 1 else self.team1.players[0]
+            success_prob = shot_success(winner, goalkeeper)
+            if random.random() < success_prob:
+                # Goal scored
+                if winner.team_id == 1:
+                    self.score_left += 1
                 else:
-                    # Failed pass: opponent takes possession
-                    winner.has_ball = False
-                    closest_opponent.has_ball = True
+                    self.score_right += 1
+            self.ball.pickup_cooldown = 20
+            winner.has_ball = False
+
+        # PASS
+        elif "pass_to" in action:
+            teammate_idx = action["pass_to"]
+            teammate = (self.team1.players if winner.team_id == 1 else self.team2.players)[teammate_idx]
+            opponents = self.team2.players if winner.team_id == 1 else self.team1.players
+
+            closest_opponent = min(opponents, key=lambda o: ((o.x - teammate.x)**2 + (o.y - teammate.y)**2)**0.5)
+            success_prob = pass_success(winner, teammate, closest_opponent)
+
+            if random.random() < success_prob:
+                # Successful pass
+                winner.has_ball = False
+                teammate.has_ball = True
+            else:
+                # Failed pass: opponent takes possession
+                winner.has_ball = False
+                closest_opponent.has_ball = True
+
 
 
 
@@ -302,6 +445,61 @@ class FootballGame:
         pygame.display.flip()
         self.clock.tick(60)  # limit FPS
 
+    def _get_player_state(self, player):
+        """
+        Return a normalized state vector for a single player.
+        Includes:
+        - Own position, velocity, possession
+        - Relative teammates info
+        - Relative opponents info
+        - Ball position/velocity relative to player
+        """
+        # Identify which team and which opponents
+        team = self.team1 if player in self.team1.players else self.team2
+        opponents = self.team2 if team is self.team1 else self.team1
+
+        state = [
+            player.x / self.width,
+            player.y / self.height,
+            player.vx / 10.0,
+            player.vy / 10.0,
+            1.0 if player.has_ball else 0.0
+        ]
+
+        # Relative teammates
+        for mate in team.players:
+            if mate is player:
+                continue
+            state.extend([
+                (mate.x - player.x) / self.width,
+                (mate.y - player.y) / self.height,
+                (mate.vx - player.vx) / 10.0,
+                (mate.vy - player.vy) / 10.0,
+                1.0 if mate.has_ball else 0.0
+            ])
+
+        # Relative opponents
+        for opp in opponents.players:
+            state.extend([
+                (opp.x - player.x) / self.width,
+                (opp.y - player.y) / self.height,
+                (opp.vx - player.vx) / 10.0,
+                (opp.vy - player.vy) / 10.0,
+                1.0 if opp.has_ball else 0.0
+            ])
+
+        # Ball info relative to player
+        state.extend([
+            (self.ball.x - player.x) / self.width,
+            (self.ball.y - player.y) / self.height,
+            self.ball.vx / 10.0,
+            self.ball.vy / 10.0,
+            1.0 if player.has_ball else 0.0
+        ])
+
+        return np.array(state, dtype=np.float32)
+
+
 def dribble_success(dribbler, defender):
     return dribbler.DRI / (dribbler.DRI + defender.DEF)
 
@@ -328,16 +526,29 @@ def shot_success(player: Player, goalkeeper: Player) -> float:
     return success_prob
 
 
-def pass_success(player, teammate, opponent=None):
+def pass_success(player, teammate, opponent=None, intercept_radius=10.0):
+    """
+    Calculate probability of a successful pass.
+    
+    player: the player making the pass
+    teammate: the intended recipient
+    opponent: nearest opponent (optional)
+    intercept_radius: only consider opponent if within this distance
+    """
     base_prob = 0.8
-    pass_vs_def = player.PAS / (player.PAS + (opponent.DRI if opponent else 0))
-    
-    opponent_pace_factor = 0.0
+    # Base factor: passer's skill vs teammate's dribbling (higher DRI of teammate makes it easier to receive)
+    pass_vs_teammate = player.PAS / (player.PAS + (100 - teammate.DRI))
+
+    opponent_factor = 0.0
     if opponent:
+        # Calculate distance to opponent
         distance = ((teammate.x - opponent.x)**2 + (teammate.y - opponent.y)**2)**0.5
-        opponent_pace_factor = min(opponent.PAC / 100, 1.0) * (1 / (distance + 1))
-    
-    return np.clip(base_prob * pass_vs_def * (1 - opponent_pace_factor), 0, 1)
+        if distance < intercept_radius:
+            # Closer opponent reduces success
+            opponent_factor = min(opponent.PAC / 100, 1.0) * (1 - distance / intercept_radius)
+
+    prob = base_prob * pass_vs_teammate * (1 - opponent_factor)
+    return np.clip(prob, 0, 1)
 
 
 

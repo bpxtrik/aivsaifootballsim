@@ -31,7 +31,7 @@ class Team:
             p.draw(screen)
 
     def _spawn_default(self):
-        self.players = []
+        # Example 1-3-1 formation: GK + 3 field players + ATT
         roles = ["GK", "DEF", "MID", "ATT"]
 
         if self.side == "left":
@@ -49,6 +49,11 @@ class Team:
                 "ATT": (self.config["field_width"] - 200, 2 * self.config["field_height"] // 3),
             }
 
-        for role in roles:
+        for i, role in enumerate(roles):
+            player = self.players[i]
             x, y = pos[role]
-            self.players.append(Player(x, y, self.team_id, color=self.color))
+            player.x = x
+            player.y = y
+            player.vx = 0
+            player.vy = 0
+            player.has_ball = False
