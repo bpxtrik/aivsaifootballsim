@@ -1,9 +1,10 @@
 from environment.player import Player
 
 class Team:
-    def __init__(self, team_id, config, side):
+    def __init__(self, team_id, config, side, players):
         self.team_id = team_id
-        self.players = []
+        self.players = [Player(0,0,team_id, stats=players[0]), Player(0,0,team_id, stats=players[1]),
+                        Player(0,0,team_id, stats=players[2]), Player(0,0,team_id, stats=players[3])]
         self.color = (0, 0, 255) if team_id == 1 else (255, 0, 0)
         self.side = side
         self.config = config

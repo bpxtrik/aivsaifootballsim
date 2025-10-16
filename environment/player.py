@@ -17,27 +17,27 @@ class Player:
         self.has_ball = False
         self.kick_power = 12.0
         
-        self.pac = None
-        self.sho = None
-        self.pas = None
-        self.dri = None
-        self.defense = None
-        self.phy = None
+        self.PAC = None
+        self.SHO = None
+        self.PAS = None
+        self.DRI = None
+        self.DEF = None
+        self.PHY = None
         
         if stats:
             self.load_stats(stats)
             
     def load_stats(self, stats): 
-        self.pac = stats.get("PAC")
-        self.sho = stats.get("SHO")
-        self.pas = stats.get("PAS")
-        self.dri = stats.get("DRI")
-        self.defense = stats.get("DEF")
-        self.phy = stats.get("PHY")
+        self.PAC = stats.get("PAC")
+        self.SHO = stats.get("SHO")
+        self.PAS = stats.get("PAS")
+        self.DRI = stats.get("DRI")
+        self.DEF = stats.get("DEF")
+        self.PHY = stats.get("PHY")
         
-        if self.pac:
-            self.max_speed = 2.0 + (self.pac / 100) * 4.0
-            self.acceleration = 0.3 + (self.pac / 100) * 0.5
+        if self.PAC:
+            self.max_speed = 2.0 + (self.PAC / 100) * 4.0
+            self.acceleration = 0.3 + (self.PAC / 100) * 0.5
 
     def move(self, action, bounds):
         """action: dict or tuple; if dict expects {'move':(dx,dy), 'shoot':bool}; bounds=(w,h)"""

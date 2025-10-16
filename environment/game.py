@@ -4,17 +4,18 @@ from environment.player import Player
 from environment.ball import Ball
 from environment.team import Team
 from environment.utils import resolve_circle_circle_collision
+import random
 
 class FootballGame:
-    def __init__(self, config):
+    def __init__(self, team1, team2, config):
         self.config = config
         self.width = config["field_width"]
         self.height = config["field_height"]
 
         # Entities
         self.ball = Ball(self.width // 2, self.height // 2)
-        self.team1 = Team(1, config, "left")
-        self.team2 = Team(2, config, "right")
+        self.team1 = Team(1, config, "left", team1)
+        self.team2 = Team(2, config, "right", team2)
 
         # Scoring
         self.score_left = 0
@@ -153,53 +154,99 @@ class FootballGame:
                 p2.x, p2.y, p2.vx, p2.vy = x2, y2, vx2, vy2
 
     def _update_possession(self, actions_team1, actions_team2):
-        # Determine if any player can take possession
         control_radius = 6
-        best_player = None
-        best_dist2 = 1e9
+        potential_players = []
+
+        # Find all players near the ball
         for p in self.team1.players + self.team2.players:
             dx = self.ball.x - p.x
             dy = self.ball.y - p.y
             dist2 = dx * dx + dy * dy
             threshold = (p.radius + self.ball.radius + control_radius)
             if dist2 <= threshold * threshold and self.ball.pickup_cooldown == 0:
-                if dist2 < best_dist2:
-                    best_dist2 = dist2
-                    best_player = p
+                potential_players.append(p)
+
+        if not potential_players:
+            return  # no one nearby
+
+        # Resolve duels between nearby players
+        winner = potential_players[0]
+        for p in potential_players[1:]:
+            if (winner.team_id == p.team_id):
+                continue
+            if self.physical_duel(winner, p):
+                winner = winner  # current winner keeps possession
+            else:
+                winner = p  # challenger wins
 
         # Clear previous possession
         for p in self.team1.players + self.team2.players:
             p.has_ball = False
 
-        if best_player is not None:
-            best_player.has_ball = True
-            # Handle shooting intent: if action includes shoot, kick the ball
-            shoot = False
-            if best_player.team_id == 1:
-                act = actions_team1.get(3) if best_player is self.team1.players[3] else None
-            else:
-                act = actions_team2.get(3) if best_player is self.team2.players[3] else None
-            if isinstance(act, dict):
-                shoot = bool(act.get("shoot", False))
+        winner.has_ball = True
 
-            if shoot:
-                # Compute target towards enemy goal center
-                if best_player.team_id == 1:
-                    gx, gy = self.width - 5, self.height // 2
-                else:
-                    gx, gy = 5, self.height // 2
-                dx = gx - best_player.x
-                dy = gy - best_player.y
-                mag = (dx * dx + dy * dy) ** 0.5
-                if mag > 0:
-                    nx, ny = dx / mag, dy / mag
-                else:
-                    nx, ny = (1.0, 0.0)
-                power = best_player.kick_power
-                self.ball.vx = best_player.vx + nx * power
-                self.ball.vy = best_player.vy + ny * power
+        # Determine action (shoot or pass)
+        action = None
+        if winner.team_id == 1:
+            action = actions_team1.get(self.team1.players.index(winner))
+        else:
+            action = actions_team2.get(self.team2.players.index(winner))
+
+        if isinstance(action, dict):
+            if action.get("shoot", False):
+                # Shooting
+                goalkeeper = self.team2.players[0] if winner.team_id == 1 else self.team1.players[0]
+                success_prob = shot_success(winner, goalkeeper)
+                if random.random() < success_prob:
+                    # Goal scored
+                    if winner.team_id == 1:
+                        self.score_left += 1
+                    else:
+                        self.score_right += 1
+                # Ball is reset or moves forward even if missed
                 self.ball.pickup_cooldown = 20
-                best_player.has_ball = False
+                winner.has_ball = False
+
+            elif "pass_to" in action:
+                # Passing
+                teammate_idx = action["pass_to"]
+                teammate = (self.team1.players if winner.team_id == 1 else self.team2.players)[teammate_idx]
+
+                # Find closest opponent to the pass line
+                opponents = self.team2.players if winner.team_id == 1 else self.team1.players
+                closest_opponent = min(opponents, key=lambda o: ((o.x - teammate.x)**2 + (o.y - teammate.y)**2)**0.5)
+
+                success_prob = pass_success(winner, teammate, closest_opponent)
+                if random.random() < success_prob:
+                    # Successful pass
+                    winner.has_ball = False
+                    teammate.has_ball = True
+                else:
+                    # Failed pass: opponent takes possession
+                    winner.has_ball = False
+                    closest_opponent.has_ball = True
+
+
+
+    def physical_duel(self, player1, player2):
+        """
+        Resolve a duel between attacker and defender.
+        Returns True if attacker keeps possession, False if defender wins.
+        """
+        # Probabilities for success
+        dribble_prob = dribble_success(player1, player2)  # between 0 and 1
+        tackle_prob = tackle_success(player2, player1)    # between 0 and 1
+
+        # Combine probabilities into a single possession chance for attacker
+        # Attacker succeeds if their dribble beats defender's tackle
+        # One simple model: attacker success = dribble_prob * (1 - tackle_prob)
+        attacker_success_chance = dribble_prob * (1 - tackle_prob)
+
+        # Randomly resolve outcome
+        if random.random() < attacker_success_chance:
+            return True  # attacker keeps ball
+        else:
+            return False  # defender wins ball
 
     def render(self):
         # Fill background green (field)
@@ -255,3 +302,45 @@ class FootballGame:
         pygame.display.flip()
         self.clock.tick(60)  # limit FPS
 
+def dribble_success(dribbler, defender):
+    return dribbler.DRI / (dribbler.DRI + defender.DEF)
+
+def shot_success(player: Player, goalkeeper: Player) -> float:
+    """
+    Returns a probability (0 to 1) that the player's shot beats the goalkeeper.
+    Factors considered:
+      - SHO (player shooting skill)
+      - PHY (player shot power)
+      - GK PHY (goalkeeper physical)
+      - GK DEF (goalkeeper defense)
+    """
+    # Normalize skills
+    shoot_skill = player.SHO / 100.0
+    shot_power = player.PHY / 100.0
+    gk_def = goalkeeper.DEF / 100.0
+    gk_phy = goalkeeper.PHY / 100.0
+
+    # Weighted probability formula
+    base_prob = 0.4 * shoot_skill + 0.4 * shot_power
+    gk_factor = 0.3 * gk_def + 0.2 * gk_phy
+
+    success_prob = max(0.05, min(0.95, base_prob - gk_factor + 0.5))  # clamp between 0.05 and 0.95
+    return success_prob
+
+
+def pass_success(player, teammate, opponent=None):
+    base_prob = 0.8
+    pass_vs_def = player.PAS / (player.PAS + (opponent.DRI if opponent else 0))
+    
+    opponent_pace_factor = 0.0
+    if opponent:
+        distance = ((teammate.x - opponent.x)**2 + (teammate.y - opponent.y)**2)**0.5
+        opponent_pace_factor = min(opponent.PAC / 100, 1.0) * (1 / (distance + 1))
+    
+    return np.clip(base_prob * pass_vs_def * (1 - opponent_pace_factor), 0, 1)
+
+
+
+def tackle_success(defender, attacker):
+    return (defender.DEF * 0.7 + defender.PHY * 0.3) / ((defender.DEF * 0.7 + defender.PHY * 0.3) + 
+                (attacker.DRI * 0.7 + attacker.PHY * 0.3))

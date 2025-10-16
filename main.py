@@ -9,7 +9,7 @@ def main():
     print(stats)
 
     # Create environment
-    env = FootballGame(config=CONFIG)
+    env = FootballGame(stats["team1"], stats["team2"], config=CONFIG)
     state = env.reset()
 
     running = True
@@ -51,9 +51,9 @@ def main():
         actions_team1 = {3: {"move": (ax_b, ay_b), "shoot": shoot_b}}
         actions_team2 = {3: {"move": (ax_r, ay_r), "shoot": shoot_r}}
 
-        # state, reward, done = env.step(actions_team1, actions_team2)
+        state, reward, done = env.step(actions_team1, actions_team2)
 
-        # env.render()
+        env.render()
 
     # Create trainer
     # trainer = Trainer(env, config=CONFIG)
