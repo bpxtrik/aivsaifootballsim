@@ -51,10 +51,10 @@ class DQNAgent:
         buffer_capacity=50000,
         batch_size=64,
         device=None,
-        target_update_freq=1000,
+        target_update_freq=150,
         epsilon_start=1.0,
         epsilon_final=0.05,
-        epsilon_decay=20000
+        epsilon_decay=250000
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.n_actions = n_actions
@@ -147,9 +147,10 @@ class DQNAgent:
             'q_state_dict': self.q_net.state_dict(),
             'target_state_dict': self.target_net.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
-            'epsilon': getattr(self, 'epsilon', 0.1)  # save epsilon if exists
+            'learn_steps': self.learn_steps   # <-- save learn_steps
         }, path)
         print(f"Agent saved to {path}")
+
 
     def load(self, path):
         import os
@@ -160,6 +161,7 @@ class DQNAgent:
         self.q_net.load_state_dict(d['q_state_dict'])
         self.target_net.load_state_dict(d['target_state_dict'])
         self.optimizer.load_state_dict(d['optimizer_state'])
-        if 'epsilon' in d:
-            self.epsilon = d['epsilon']
+        if 'learn_steps' in d:
+            self.learn_steps = d['learn_steps']   # <-- restore learn_steps
         print(f"Agent loaded from {path}")
+

@@ -62,6 +62,53 @@ def main():
     # Start training
     # trainer.train(num_episodes=CONFIG["episodes"])
 
+import os
+from dqn import DQNAgent
+from config import NUM_ACTIONS
+from environment.game import FootballGame
+from data.data_loader import load_training_players
+from config import CONFIG
+
+def load_all_agents(path):
+    """
+    Loads 8 trained agents from checkpoints folder:
+    team1_agent_0.pt ... team1_agent_3.pt
+    team2_agent_0.pt ... team2_agent_3.pt
+    Returns: (team1_agents, team2_agents)
+    """
+    # Build env once to get state_dim
+    stats = load_training_players("data/fifa_2023.csv")
+    env = FootballGame(stats["team1"], stats["team2"], config=CONFIG)
+    state_dim = len(env._get_player_state(env.team1.players[0]))
+
+    checkpoint_dir = path
+    team1_agents, team2_agents = [], []
+
+    for i in range(4):
+        agent1_path = os.path.join(checkpoint_dir, f"team1_agent_{i}.pt")
+        agent2_path = os.path.join(checkpoint_dir, f"team2_agent_{i}.pt")
+
+        agent1 = DQNAgent(state_dim, NUM_ACTIONS)
+        agent2 = DQNAgent(state_dim, NUM_ACTIONS)
+
+        agent1.load(agent1_path)
+        agent2.load(agent2_path)
+
+        team1_agents.append(agent1)
+        team2_agents.append(agent2)
+
+    print("✅ All agents loaded successfully.")
+    return team1_agents, team2_agents
+
+import pygame
+from environment.game import FootballGame
+from data.data_loader import load_training_players
+from config import CONFIG
+
+
 from train import train_8_agents
+from evaulation import evaluate_8_agents
 if __name__ == "__main__":
     train_8_agents()
+    # (team1_agents, team2_agents) = load_all_agents("checkpoints")
+    # evaluate_8_agents(team1_agents, team2_agents, render_last_n=10)

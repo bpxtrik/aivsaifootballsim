@@ -2,6 +2,7 @@ import pygame
 import numpy as np
 from agents.coach_agent import CoachAgent
 from agents.player_agent import PlayerAgent
+from config import ACTION_SPACE
 from environment.player import Player
 from environment.ball import Ball
 from environment.team import Team
@@ -122,138 +123,212 @@ class FootballGame:
 
     def _calculate_rewards(self):
         """
-        Balanced reward system for DQN training:
-        - Positive rewards for scoring and moving toward goal
-        - Small incentives for ball chasing
-        - Rewards clamped per step to prevent spikes
+        Improved reward system that encourages:
+        - Scoring goals
+        - Ball possession and progress
+        - Spatial positioning (avoiding clustering)
+        - Role-based behavior (defenders stay back, attackers push forward)
         """
         rewards_team1 = np.zeros(len(self.team1.players))
         rewards_team2 = np.zeros(len(self.team2.players))
 
         # --- Goal rewards (applied once per goal) ---
         if self.last_scored == "left":
-            rewards_team1 += 5.0   # reward for scoring
-            rewards_team2 -= 2.5   # penalty for conceding
+            rewards_team1 += 10.0  # Increased goal reward
+            rewards_team2 -= 5.0
+            self.last_scored = None  # Reset so it's only applied once
         elif self.last_scored == "right":
-            rewards_team1 -= 2.5
-            rewards_team2 += 5.0
+            rewards_team1 -= 5.0
+            rewards_team2 += 10.0
+            self.last_scored = None
 
-        # --- Movement / possession rewards ---
+        # --- Team 1 rewards ---
         for i, p in enumerate(self.team1.players):
             reward = 0.0
+            
+            # Goalkeeper rewards (index 0)
+            if i == 0:
+                # Reward for staying in goal area
+                goal_x = 15
+                goal_center_y = self.height / 2
+                dist_from_goal = abs(p.x - goal_x)
+                if dist_from_goal < 80:
+                    reward += 0.02
+                
+                # Reward for tracking ball vertically
+                ball_y_error = abs(p.y - self.ball.y)
+                if ball_y_error < 100:
+                    reward += 0.02 * (100 - ball_y_error) / 100
+                
+                # Big reward for being between ball and goal
+                if p.x < self.ball.x and abs(p.y - self.ball.y) < 50:
+                    reward += 0.05
+                
+                # Penalty if opponent scores (already handled by goal rewards)
+                rewards_team1[i] = np.clip(reward, -1.0, 1.0)
+                continue
+
+            # Define roles based on player index
+            is_defender = (i == 1)  # Player 1 is defender
+            is_midfielder = (i == 2)  # Player 2 is midfielder
+            is_attacker = (i == 3)   # Player 3 is attacker
+
+            # Ball possession rewards
             if p.has_ball:
-                # Reward for having the ball
-                reward += 0.05
+                reward += 0.1  # Increased possession reward
+                
                 # Progress toward opponent goal
                 progress = p.x / self.width
-                reward += progress * 0.02
-                # Small reward for moving forward
-                reward += max(0, p.vx) * 0.005
+                reward += progress * 0.05
+                
+                # Reward moving forward with ball
+                reward += max(0, p.vx) * 0.01
+                
+                # Reward dribbling
+                if getattr(p, "action_idx", None) is not None and ACTION_SPACE[p.action_idx].get("dribble"):
+                    reward += 0.03
             else:
-                # Reward for moving toward the ball
-                dx = self.ball.x - p.x
-                dy = self.ball.y - p.y
-                dist_to_ball = max((dx**2 + dy**2)**0.5, 1e-5)  # avoid div by zero
-                ball_dx = dx / dist_to_ball
-                ball_dy = dy / dist_to_ball
-                velocity_toward_ball = p.vx * ball_dx + p.vy * ball_dy
-                reward += max(0, velocity_toward_ball) * 0.01
-                # Small reward for being close to ball
-                if dist_to_ball < 100:
-                    reward += 0.01 * (100 - dist_to_ball) / 100
+                # Not in possession - role-based positioning
+                dist_to_ball = ((self.ball.x - p.x)**2 + (self.ball.y - p.y)**2)**0.5
+                
+                if is_attacker:
+                    # Attackers should be close to ball and push forward
+                    if dist_to_ball < 200:
+                        reward += 0.02 * (200 - dist_to_ball) / 200
+                    # Reward for being in attacking third
+                    if p.x > self.width * 0.66:
+                        reward += 0.01
+                        
+                elif is_midfielder:
+                    # Midfielders maintain central position
+                    center_x = self.width * 0.5
+                    center_y = self.height * 0.5
+                    dist_to_center = ((p.x - center_x)**2 + (p.y - center_y)**2)**0.5
+                    # Small reward for being near center
+                    if dist_to_center < 150:
+                        reward += 0.01
+                    # Also chase ball if nearby
+                    if dist_to_ball < 150:
+                        reward += 0.01 * (150 - dist_to_ball) / 150
+                        
+                elif is_defender:
+                    # Defenders stay back and track opponents
+                    # Reward for staying in defensive third
+                    if p.x < self.width * 0.33:
+                        reward += 0.02
+                    # Penalty for being too far forward
+                    if p.x > self.width * 0.66:
+                        reward -= 0.02
 
-            # Clamp per-step reward to prevent spikes
-            rewards_team1[i] = np.clip(reward, -1.0, 1.0)
+            # --- Anti-clustering penalty ---
+            # Penalize being too close to teammates
+            for j, teammate in enumerate(self.team1.players):
+                if i != j and j != 0:  # Skip self and goalkeeper
+                    dist = ((p.x - teammate.x)**2 + (p.y - teammate.y)**2)**0.5
+                    if dist < 50:  # Too close threshold
+                        reward -= 0.05 * (50 - dist) / 50
 
+            # --- Field coverage reward ---
+            # Reward for maintaining good spacing (based on expected positions)
+            expected_x = (i / 3) * self.width  # Spread players across field
+            expected_y = self.height / 2
+            dist_from_expected = ((p.x - expected_x)**2 + (p.y - expected_y)**2)**0.5
+            if dist_from_expected < 100:
+                reward += 0.01 * (100 - dist_from_expected) / 100
+
+            rewards_team1[i] = np.clip(reward, -2.0, 2.0)
+
+        # --- Team 2 rewards (mirrored) ---
         for i, p in enumerate(self.team2.players):
             reward = 0.0
-            if p.has_ball:
-                reward += 0.05
-                progress = (self.width - p.x) / self.width
-                reward += progress * 0.02
-                reward += max(0, -p.vx) * 0.005
-            else:
-                dx = self.ball.x - p.x
-                dy = self.ball.y - p.y
-                dist_to_ball = max((dx**2 + dy**2)**0.5, 1e-5)
-                ball_dx = dx / dist_to_ball
-                ball_dy = dy / dist_to_ball
-                velocity_toward_ball = p.vx * ball_dx + p.vy * ball_dy
-                reward += max(0, velocity_toward_ball) * 0.01
-                if dist_to_ball < 100:
-                    reward += 0.01 * (100 - dist_to_ball) / 100
+            
+            if i == 0:
+                goal_x = self.width - 15
+                goal_center_y = self.height / 2
+                dist_from_goal = abs(p.x - goal_x)
+                if dist_from_goal < 80:
+                    reward += 0.02
+                
+                # Tracking ball vertically
+                ball_y_error = abs(p.y - self.ball.y)
+                if ball_y_error < 100:
+                    reward += 0.02 * (100 - ball_y_error) / 100
+                
+                # Big reward for being between ball and goal
+                if p.x > self.ball.x and abs(p.y - self.ball.y) < 50:
+                    reward += 0.05
+                
+                rewards_team2[i] = np.clip(reward, -1.0, 1.0)
+                continue
 
-            rewards_team2[i] = np.clip(reward, -1.0, 1.0)
+            is_defender = (i == 1)
+            is_midfielder = (i == 2)
+            is_attacker = (i == 3)
+
+            if p.has_ball:
+                reward += 0.1
+                progress = (self.width - p.x) / self.width
+                reward += progress * 0.05
+                reward += max(0, -p.vx) * 0.01
+                if getattr(p, "action_idx", None) is not None and ACTION_SPACE[p.action_idx].get("dribble"):
+                    reward += 0.03
+            else:
+                dist_to_ball = ((self.ball.x - p.x)**2 + (self.ball.y - p.y)**2)**0.5
+                
+                if is_attacker:
+                    if dist_to_ball < 200:
+                        reward += 0.02 * (200 - dist_to_ball) / 200
+                    if p.x < self.width * 0.33:  # Attacking third for team 2
+                        reward += 0.01
+                        
+                elif is_midfielder:
+                    center_x = self.width * 0.5
+                    center_y = self.height * 0.5
+                    dist_to_center = ((p.x - center_x)**2 + (p.y - center_y)**2)**0.5
+                    if dist_to_center < 150:
+                        reward += 0.01
+                    if dist_to_ball < 150:
+                        reward += 0.01 * (150 - dist_to_ball) / 150
+                        
+                elif is_defender:
+                    if p.x > self.width * 0.66:  # Defensive third for team 2
+                        reward += 0.02
+                    if p.x < self.width * 0.33:
+                        reward -= 0.02
+
+            # Anti-clustering
+            for j, teammate in enumerate(self.team2.players):
+                if i != j and j != 0:
+                    dist = ((p.x - teammate.x)**2 + (p.y - teammate.y)**2)**0.5
+                    if dist < 50:
+                        reward -= 0.05 * (50 - dist) / 50
+
+            # Field coverage
+            expected_x = self.width - (i / 3) * self.width  # Mirrored for team 2
+            expected_y = self.height / 2
+            dist_from_expected = ((p.x - expected_x)**2 + (p.y - expected_y)**2)**0.5
+            if dist_from_expected < 100:
+                reward += 0.01 * (100 - dist_from_expected) / 100
+
+            rewards_team2[i] = np.clip(reward, -2.0, 2.0)
 
         return rewards_team1, rewards_team2
 
+
     def _get_state(self):
         """
-        Returns the game state as a vector for all agents.
-        Each agent sees:
-        - Its own position and velocity
-        - Ball position and velocity
-        - Relative positions/velocities of teammates
-        - Relative positions/velocities of opponents
-        - Ball possession
+        Returns the full environment state as a flattened array.
+        Each player gets their individual perspective from _get_player_state().
         """
-        state = []
+        all_states = []
 
-        # Ball info
-        ball_info = [
-            self.ball.x / self.width,
-            self.ball.y / self.height,
-            self.ball.vx / 10.0,  # normalize by reasonable speed
-            self.ball.vy / 10.0,
-            self.ball.pickup_cooldown / 20.0
-        ]
-
-        for team, opponents in [(self.team1, self.team2), (self.team2, self.team1)]:
+        for team in [self.team1, self.team2]:
             for player in team.players:
-                # Own player info
-                player_info = [
-                    player.x / self.width,
-                    player.y / self.height,
-                    player.vx / 10.0,
-                    player.vy / 10.0,
-                    1.0 if player.has_ball else 0.0
-                ]
+                player_state = self._get_player_state(player)
+                all_states.append(player_state)
 
-                # Teammates relative info
-                for mate in team.players:
-                    if mate is player:
-                        continue
-                    player_info.extend([
-                        (mate.x - player.x) / self.width,
-                        (mate.y - player.y) / self.height,
-                        (mate.vx - player.vx) / 10.0,
-                        (mate.vy - player.vy) / 10.0,
-                        1.0 if mate.has_ball else 0.0
-                    ])
+        return np.concatenate(all_states).astype(np.float32)
 
-                # Opponents relative info
-                for opp in opponents.players:
-                    player_info.extend([
-                        (opp.x - player.x) / self.width,
-                        (opp.y - player.y) / self.height,
-                        (opp.vx - player.vx) / 10.0,
-                        (opp.vy - player.vy) / 10.0,
-                        1.0 if opp.has_ball else 0.0
-                    ])
-
-                # Add ball info relative to player
-                player_info.extend([
-                    (self.ball.x - player.x) / self.width,
-                    (self.ball.y - player.y) / self.height,
-                    self.ball.vx / 10.0,
-                    self.ball.vy / 10.0,
-                    1.0 if player.has_ball else 0.0
-                ])
-
-                state.append(player_info)
-
-            state = np.array(state, dtype=np.float32)
-            return state.flatten()
 
 
     def _resolve_player_ball(self, player: Player):
@@ -323,15 +398,6 @@ class FootballGame:
 
         # Use the new signature (no player needed here)
         self.ball.apply_impulse(None, direction, power, kick_type="pass")
-
-    # def _check_goal(self, goal_top: int, goal_bottom: int):
-    #     # Left goal
-    #     if self.ball.x - self.ball.radius <= 0 and goal_top <= self.ball.y <= goal_bottom:
-    #         return "left"
-    #     # Right goal
-    #     if self.ball.x + self.ball.radius >= self.width and goal_top <= self.ball.y <= goal_bottom:
-    #         return "right"
-    #     return None
 
     def _resolve_all_player_collisions(self):
         players = self.team1.players + self.team2.players
@@ -414,7 +480,7 @@ class FootballGame:
             self.ball.pickup_cooldown = 20
 
         # --- PASS ---
-        elif "pass_to" in action:
+        elif "pass_to" in action and action["pass_to"] is not None:
             teammate_idx = action["pass_to"]
             teammate = (self.team1.players if winner.team_id == 1 else self.team2.players)[teammate_idx]
             opponents = self.team2.players if winner.team_id == 1 else self.team1.players
@@ -431,6 +497,7 @@ class FootballGame:
                 self.ball.has_possessor = True
                 winner.has_ball = False
                 closest_opp.has_ball = True
+
 
         # --- DRIBBLE / MOVE ---
         elif action.get("dribble", False) or ("move" in action and action["move"] != (0, 0)):
@@ -536,26 +603,30 @@ class FootballGame:
 
     def _get_player_state(self, player):
         """
-        Return a normalized state vector for a single player.
+        Returns a normalized state vector for a single player.
         Includes:
-        - Own position, velocity, possession
-        - Relative teammates info
-        - Relative opponents info
-        - Ball position/velocity relative to player
+        - Absolute position/velocity
+        - Ball position and velocity (absolute + relative)
+        - Relative teammate and opponent info
+        - Goal direction and team possession context
         """
-        # Identify which team and which opponents
         team = self.team1 if player in self.team1.players else self.team2
         opponents = self.team2 if team is self.team1 else self.team1
 
+        attack_dir = 1.0 if team is self.team1 else -1.0
+        team_has_ball = 1.0 if any(p.has_ball for p in team.players) else 0.0
+        opp_has_ball = 1.0 if any(p.has_ball for p in opponents.players) else 0.0
+
+        # Absolute player info
         state = [
             player.x / self.width,
             player.y / self.height,
             player.vx / 10.0,
             player.vy / 10.0,
-            1.0 if player.has_ball else 0.0
+            1.0 if player.has_ball else 0.0,
         ]
 
-        # Relative teammates
+        # Teammate info (relative)
         for mate in team.players:
             if mate is player:
                 continue
@@ -564,29 +635,48 @@ class FootballGame:
                 (mate.y - player.y) / self.height,
                 (mate.vx - player.vx) / 10.0,
                 (mate.vy - player.vy) / 10.0,
-                1.0 if mate.has_ball else 0.0
+                1.0 if mate.has_ball else 0.0,
             ])
 
-        # Relative opponents
+        # Opponent info (relative)
         for opp in opponents.players:
             state.extend([
                 (opp.x - player.x) / self.width,
                 (opp.y - player.y) / self.height,
                 (opp.vx - player.vx) / 10.0,
                 (opp.vy - player.vy) / 10.0,
-                1.0 if opp.has_ball else 0.0
+                1.0 if opp.has_ball else 0.0,
             ])
 
-        # Ball info relative to player
+        # Ball info (absolute + relative)
         state.extend([
+            self.ball.x / self.width,
+            self.ball.y / self.height,
             (self.ball.x - player.x) / self.width,
             (self.ball.y - player.y) / self.height,
             self.ball.vx / 10.0,
             self.ball.vy / 10.0,
-            1.0 if player.has_ball else 0.0
+        ])
+
+        # Goal information (relative to player)
+        own_goal_x = 0.0 if team is self.team1 else 1.0
+        own_goal_y = 0.5
+        opp_goal_x = 1.0 if team is self.team1 else 0.0
+        opp_goal_y = 0.5
+
+        state.extend([
+            attack_dir,
+            (own_goal_x * self.width - player.x) / self.width,
+            (own_goal_y * self.height - player.y) / self.height,
+            (opp_goal_x * self.width - player.x) / self.width,
+            (opp_goal_y * self.height - player.y) / self.height,
+            team_has_ball,
+            opp_has_ball,
         ])
 
         return np.array(state, dtype=np.float32)
+
+
 
 
 def dribble_success(dribbler, defender):
