@@ -46,6 +46,10 @@ class Ball:
 
         self.pickup_cooldown = 10
         self.last_owner = player
+        
+        # FIX: Set kick_type and last_kicker so the ball can move freely
+        self.kick_type = kick_type
+        self.last_kicker = player
 
 
 

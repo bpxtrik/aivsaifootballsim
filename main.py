@@ -110,5 +110,6 @@ from train import train_8_agents
 from evaulation import evaluate_8_agents
 if __name__ == "__main__":
     train_8_agents()
+    # train_8_agents_parallel()
     # (team1_agents, team2_agents) = load_all_agents("checkpoints")
     # evaluate_8_agents(team1_agents, team2_agents, render_last_n=10)
