@@ -107,7 +107,6 @@ from config import CONFIG
 
 
 from train import train_8_agents
-from evaulation import evaluate_8_agents
 if __name__ == "__main__":
     train_8_agents()
     # train_8_agents_parallel()
