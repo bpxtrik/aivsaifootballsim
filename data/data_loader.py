@@ -99,6 +99,34 @@ def load_training_players(csv_path, team_size=4):
 
     return teams
 
+import csv
+from typing import List, Dict
+
+def load_top15_rankings(filename: str, date_filter: str = "2024-06-20") -> List[Dict]:
+    """
+    Load CSV and return only rows that have rank_date equal to date_filter.
+    
+    Returns a list of dictionaries with keys:
+    'rank', 'country_full', 'country_abrv', 'total_points', 
+    'previous_points', 'rank_change', 'confederation', 'rank_date'
+    """
+    filtered_rows = []
+    
+    with open(filename, newline='', encoding='utf-8') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            if row["rank_date"] == date_filter:
+                try:
+                    filtered_rows.append({
+                        "rank": float(row["rank"]),
+                        "country_full": row["country_full"]
+                    })
+                except:
+                    continue
+    
+        top15 = sorted(filtered_rows, key=lambda x: x["rank"])[:15]
+        return top15
+
 
 def pack_stats(row):
     return {

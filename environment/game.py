@@ -10,7 +10,7 @@ from environment.utils import resolve_circle_circle_collision
 import random
 
 class FootballGame:
-    def __init__(self, team1, team2, config):
+    def __init__(self, team1, team2, config, team1_name="Blue", team2_name="Red"):
         self.config = config
         self.width = config["field_width"]
         self.height = config["field_height"]
@@ -19,6 +19,9 @@ class FootballGame:
         self.ball = Ball(self.width // 2, self.height // 2)
         self.team1 = Team(1, config, "left", team1)
         self.team2 = Team(2, config, "right", team2)
+
+        self.team1_name = team1_name
+        self.team2_name = team2_name
 
         # Scoring
         self.score_left = 0
@@ -489,7 +492,7 @@ class FootballGame:
 
         # Scoreboard
         font = pygame.font.SysFont(None, 24)
-        score_text = font.render(f"Blue {self.score_left} - {self.score_right} Red", True, white)
+        score_text = font.render(f"{self.team1_name} {self.score_left} - {self.score_right} {self.team2_name}", True, white)
         self.screen.blit(score_text, (self.width // 2 - score_text.get_width() // 2, 10))
 
         # Update display
